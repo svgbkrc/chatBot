@@ -1,10 +1,13 @@
 import re
 from transformers import pipeline, AutoTokenizer, AutoModelForQuestionAnswering
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 from db_connection import get_database_connection  # Veritabanı bağlantısı için modülünüz
 from fuzzywuzzy import process
-from typing import List, Dict, Union
+ 
+
 class ChatBot:
+    
     def __init__(self):
         """
         Chatbot'un başlatılması ve modellerin yüklenmesi.
@@ -20,11 +23,6 @@ class ChatBot:
         # Türkçe soru-cevap için başka bir model (isteğe bağlı kullanabilirsiniz)
         self.tokenizer = AutoTokenizer.from_pretrained("lserinol/bert-turkish-question-answering")
         self.model = AutoModelForQuestionAnswering.from_pretrained("lserinol/bert-turkish-question-answering")
-
-    @staticmethod
-    def normalize_turkish_chars(user_input):
-        char_map = str.maketrans("çğıöşüÇĞİÖŞÜ", "cgiosuCGIOSU")
-        return user_input.translate(char_map)
 
     def answer_question(self, question, context):
         """
@@ -47,7 +45,7 @@ class ChatBot:
         except Exception as e:
             print(f"Error analyzing request: {e}")
             return None
-        
+    
     def get_available_colors(self):
         """
         Veritabanında tanımlı renkler döncevej
@@ -128,6 +126,51 @@ class ChatBot:
             print("Eşleşen FullFeature bulunamadı.")
             return None
     
+    def get_available_prices(self):
+        query = "SELECT prPrice FROM Products WHERE prPrice IS NOT NULL"
+        try:
+            result = self.db.execute(query).fetchall()
+            print(f"Bulunan fiyat sayısı : {len(result)}")
+            return result
+        except Exception as e:
+            print(f"Priceları alrıken sorun oluştu : {e}")
+            return []
+
+    def match_prices(self,user_input):
+        available_prices = [row[0] for row in self.get_available_prices()]
+        normalized_input = ' '.join(user_input.lower().split())
+        best_match = process.extractOne(normalized_input, available_prices)
+        if best_match and best_match[1] > 60 :
+            price = best_match[0]
+            print(f"Eşleşen price : {price}")
+            return price
+        else:
+            print("Eşleşen price yok.")
+            return None
+
+    def filter_by_price (self, user_input, base_query, params):
+        """
+        :param user_input: String input alınacak örneğin "2000 Tl'den ucuz telefon istiyorum."
+        """
+        match = re.search(r'(\d+)\s*TL.*?(ucuz|pahalı)', user_input, re.IGNORECASE)
+   
+        if match :
+            price = int(match.group(1))
+            comparison = match.group(2).lower()
+           
+            if comparison =="ucuz":
+                base_query += " AND p.prPrice < ?"
+                params.append(price)
+            elif comparison == "pahalı":
+                base_query = " AND p.prPrice > ?"
+                params.append(price)
+
+            print(f"Yeni giriş : {base_query}")
+            return base_query , params
+        else:
+            print("Fiyata göre filtreleme yapılamadı.")
+            return base_query,params                 
+ 
     def get_user_query(self, user_input):
         """
         Kullanıcının mesajını analiz eder.
@@ -135,11 +178,12 @@ class ChatBot:
         color = self.match_color_from_input(user_input)
         product_type = self.match_product_types(user_input)
         full_feature = self.match_fullFeature(user_input)
+        price = self.match_prices(user_input)
         
-        print(f"Elde edilen değerler : {color} , {product_type} , {full_feature}")
-        return color, product_type, full_feature
+        print(f"Elde edilen değerler : {color} , {product_type} , {full_feature} , {price}")
+        return color, product_type, full_feature, price
 
-    def fetch_products(self, color, product_type, full_feature):
+    def fetch_products(self, color, product_type, full_feature, price ,user_input):
         """
         Kullanıcı kriterlerine göre veritabanından ürünleri getirir.
         """
@@ -161,32 +205,40 @@ class ChatBot:
         LEFT JOIN Subcategories sc ON p.subcategoryID = sc.subcategoryID
         WHERE 1=1
         """
+        params = []
 
         # Filtreler ekleyelim        
         if color:
-            base_query += f" AND LOWER(p.prColor) LIKE LOWER('%{color}%')"
+            base_query += f" AND LOWER(p.prColor) LIKE LOWER(?)"
+            params.append(f"%{color}%")
         if product_type:
-            base_query += f" AND LOWER(sc.subcatName) LIKE LOWER('%{product_type}%')"
+            base_query += f" AND LOWER(sc.subcatName) LIKE LOWER(?)"
+            params.append(f"%{product_type}%")
         if full_feature:
-            base_query += f" AND LOWER(pf.FullFeature) LIKE LOWER('%{full_feature}%')"
+            base_query += f" AND LOWER(pf.FullFeature) LIKE LOWER(?)"
+            params.append(f"%{full_feature}%")
+        if price:
+            base_query += f" AND p.prPrice LIKE ?"
+            params.append(f"%{price}%")
+        base_query, params = self.filter_by_price(user_input,base_query, params)
 
         base_query += """
         GROUP BY p.productID, p.prPrice, p.prColor, p.prName, sc.subcatName, pf.featureName, pf.featureValue, pf.FullFeature
         """
 
         print(f"Çalıştırılan sorgu : {base_query}")
-        cursor.execute(base_query)
+        cursor.execute(base_query, params)
         rows = cursor.fetchall()
         conn.close()
         print(f"Bulunan ürün sayısı : {len(rows)}")
         
         return rows
-
+ 
     def process_user_input(self, user_input):
-        color, product_type, full_feature = self.get_user_query(user_input)
-        print(f"Color: {color}, Product Type: {product_type}, Feature: {full_feature}")  # Debug çıktısı
-        products = self.fetch_products(color, product_type, full_feature)
-
+        color, product_type, full_feature, price = self.get_user_query(user_input)
+        print(f"Color: {color}, Product Type: {product_type}, Feature: {full_feature}, Price:{price}")  # Debug çıktısı
+        products = self.fetch_products(color, product_type, full_feature, price, user_input)
+        
         if products:
             # Ürünleri JSON formatında döndür
             return [{
@@ -200,76 +252,15 @@ class ChatBot:
             } for row in products]
         else:
             return [{"message": "Kriterlere uygun ürün bulunamadı."}]
-
-    def parse_criteria_from_input(self, user_input):
-        """Kullanıcıdan alınan girdinin kriterlerini ayrıştırmak için."""
-        feature_mapping = {
-            "garanti süresi 2 yıl": "2 yıl garanti süresi",
-            "ram 8 gb" : "8 gb ram",
-            "ram 4 gb" : "4 gb ram",
-            "ram 16 gb" : "16 gb ram",
-            "ram 12 gb" : "12 gb ram",
-            "dahili hafıza 1 tb" : "1 tb dahili hafıza",
-            "pil gücü 3095 mah" : "3095 mah pil gücü",
-            "kamera çözünürlüğü 48 mp" : "48 MP Kamera Çözünürlüğü",
-            "pil gücü 4422 mah" : " 4422 mah pil gücü",
-            "dahili hafıza 128 gb" : "128 gb dahili hafıza",
-            "işletim sistemi ios" : "ios işletim sistemi",
-            "markası samsung" : "samsung marka",
-            "markası apple" : "apple marka",
-            "iphone" : "apple",
-            "kamerası" : "Kamera Çözünürlüğü",
-            "kamerasi" : "Kamera Çözünürlüğü",
-            "camera" : "Kamera Çözünürlüğü",
-        }
         
-        #Sayısal karşılaştırmalar için ekleme
-        operators = {
-            "üstü": ">",
-            "üstünde": ">",
-            "üzeri": ">",
-            "daha iyi": ">",
-            "altı": "<",
-            "altında": "<",
-            "daha az": "<",
-            "esit" : "=",
-            "eşit": "=",
-            "olmalı": "=",
-            "olan": "="
-        }
 
-        parsed_criteria = {}
-
-        tokens = user_input.lower().split()
-        for i, word in enumerate(tokens):
-            #Özellik adı eşleştiricez
-            for keyword , feature in feature_mapping.items():
-                if keyword in word:
-                #Sayı veya karşılaştırma için değer arıyoruz
-                    for j in range(i+1, len(tokens)):
-                        if tokens[j].isdigit():
-                            value = tokens[j]
-                            break
-                        else:
-                            continue
-                        
-                        #Şimdi operatörü bulalım
-                        for k in range(i-1, -1, -1):
-                            if tokens[k] in operators:
-                                operator = operators[tokens[k]]
-                                break
-                            else:
-                                operator = "="
-                            parsed_criteria[feature]=f"{operator}{value} GB"
-                            break
-        return parsed_criteria
-
-
-
+ 
+    
 
 # Flask Uygulaması
 app = Flask(__name__)
 chatbot = ChatBot()
+CORS(app)
 
 @app.route('/')
 def home():
@@ -279,12 +270,15 @@ def home():
 def chat():
     try:
         #User inputu allaım
-        user_input = request.json.get('message')
+        user_input = request.json.get('message', '')
+        print(f"Kullanıcı girisi : {user_input}")
         if not user_input:
             return jsonify({"error": "Lütfen istediğiniz ürün özelliklerini yazınız."}), 400
-        products = chatbot.process_user_input(user_input)
-        if products:
-            return jsonify({"products": products}), 200
+        
+        result = chatbot.process_user_input(user_input)
+        
+        if result:
+            return jsonify({"products": result}), 200
         else:
             return jsonify({"message":" aradığınız kriterlere uygun bir ürün bulunamadı."}), 404
     except Exception as e:
@@ -293,4 +287,4 @@ def chat():
    
 
 if __name__ == '__main__':
-    app.run(port=5000, debug=True)
+    app.run(host="127.0.0.1",port=5000)
