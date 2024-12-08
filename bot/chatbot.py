@@ -192,7 +192,8 @@ class ChatBot:
 
         # Dinamik SQL sorgusu
         base_query = """
-        SELECT p.prName AS prName, 
+        SELECT p.productID as productID
+        p.prName AS prName, 
         p.prPrice,
         p.prColor AS prColor, 
         pf.featureName AS featureName,
@@ -248,7 +249,9 @@ class ChatBot:
                 "feature": row[3],
                 "feature_value": row[4],
                 "subcategory": row[5],
-                "full_feature": row[6]
+                "full_feature": row[6],
+                "self_link": f"/product/{row[7]}",
+                "producId":row[8]
             } for row in products]
         else:
             return [{"message": "Kriterlere uygun ürün bulunamadı."}]
