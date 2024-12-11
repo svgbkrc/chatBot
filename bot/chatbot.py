@@ -152,21 +152,20 @@ class ChatBot:
         """
         :param user_input: String input alınacak örneğin "2000 Tl'den ucuz telefon istiyorum."
         """
-        match = re.search(r'(\d+)\s*TL.*?(ucuz|pahalı)', user_input, re.IGNORECASE)
+        match = re.search(r'(\d+)\s*TL?\s*(ucuz|pahalı)', user_input, re.IGNORECASE)
    
         if match :
             price = int(match.group(1))
-            comparison = match.group(2).lower()
+            condition = match.group(2).lower()
            
-            if comparison =="ucuz":
+            if "ucuz" in condition:
                 base_query += " AND p.prPrice < ?"
-                params.append(price)
-            elif comparison == "pahalı":
+            elif "pahalı" in condition:
                 base_query = " AND p.prPrice > ?"
-                params.append(price)
 
-            print(f"Yeni giriş : {base_query}")
+            params.append(price)       
             return base_query , params
+
         else:
             print("Fiyata göre filtreleme yapılamadı.")
             return base_query,params                 
@@ -183,7 +182,7 @@ class ChatBot:
         print(f"Elde edilen değerler : {color} , {product_type} , {full_feature} , {price}")
         return color, product_type, full_feature, price
 
-    def fetch_products(self, color, product_type, full_feature, price ,user_input):
+    def fetch_products(self, color, product_type, full_feature, price , user_input):
         """
         Kullanıcı kriterlerine göre veritabanından ürünleri getirir.
         """
@@ -192,18 +191,18 @@ class ChatBot:
 
         # Dinamik SQL sorgusu
         base_query = """
-        SELECT p.productID as productID
-        p.prName AS prName, 
-        p.prPrice,
-        p.prColor AS prColor, 
-        pf.featureName AS featureName,
-        pf.featureValue AS featureValue, 
+        SELECT DISTINCT p.productID as productID, p.prName AS prName, 
+        p.prPrice AS prPrice , p.prColor AS prColor,         
         sc.subcatName AS subcatName,
-        pf.FullFeature AS FullFeature
+        (SELECT TOP 1 picUrl 
+        FROM Pictures 
+        WHERE Pictures.productID = p.productID 
+        ORDER BY picUrl ) AS picUrl
         FROM Products p
         LEFT JOIN ProductFeatures pf ON p.productID = pf.productID
         LEFT JOIN ProductFeatureDefinitions pfd ON pf.productFeatureID = pfd.productFeatureID
         LEFT JOIN Subcategories sc ON p.subcategoryID = sc.subcategoryID
+        LEFT JOIN Pictures pic ON p.productID = pic.productID
         WHERE 1=1
         """
         params = []
@@ -223,8 +222,8 @@ class ChatBot:
             params.append(f"%{price}%")
         base_query, params = self.filter_by_price(user_input,base_query, params)
 
-        base_query += """
-        GROUP BY p.productID, p.prPrice, p.prColor, p.prName, sc.subcatName, pf.featureName, pf.featureValue, pf.FullFeature
+        base_query += """        
+        GROUP BY p.productID, p.prPrice, p.prColor, p.prName, sc.subcatName
         """
 
         print(f"Çalıştırılan sorgu : {base_query}")
@@ -232,33 +231,29 @@ class ChatBot:
         rows = cursor.fetchall()
         conn.close()
         print(f"Bulunan ürün sayısı : {len(rows)}")
+        print(rows)
         
         return rows
  
     def process_user_input(self, user_input):
-        color, product_type, full_feature, price = self.get_user_query(user_input)
+        color, product_type, full_feature, price= self.get_user_query(user_input)
         print(f"Color: {color}, Product Type: {product_type}, Feature: {full_feature}, Price:{price}")  # Debug çıktısı
         products = self.fetch_products(color, product_type, full_feature, price, user_input)
         
         if products:
             # Ürünleri JSON formatında döndür
             return [{
-                "name": row[0], 
-                "price": row[1], 
-                "color": row[2],
-                "feature": row[3],
-                "feature_value": row[4],
-                "subcategory": row[5],
-                "full_feature": row[6],
-                "self_link": f"/product/{row[7]}",
-                "producId":row[8]
+                "name": row[1], 
+                "price": row[2], 
+                "color": row[3],
+                "subcategory": row[4],
+                "picUrl": row[5],
+                "self_link": f"/product/{row[0]}",
+                "productID":row[0]
             } for row in products]
         else:
             return [{"message": "Kriterlere uygun ürün bulunamadı."}]
-        
-
- 
-    
+            
 
 # Flask Uygulaması
 app = Flask(__name__)
@@ -271,23 +266,16 @@ def home():
 
 @app.route('/chat', methods=['POST'])
 def chat():
+    user_input = request.json.get('message', '')
+    if not user_input:
+        return jsonify({"error": "Mesaj boş olamaz."}), 400
+
     try:
-        #User inputu allaım
-        user_input = request.json.get('message', '')
-        print(f"Kullanıcı girisi : {user_input}")
-        if not user_input:
-            return jsonify({"error": "Lütfen istediğiniz ürün özelliklerini yazınız."}), 400
-        
-        result = chatbot.process_user_input(user_input)
-        
-        if result:
-            return jsonify({"products": result}), 200
-        else:
-            return jsonify({"message":" aradığınız kriterlere uygun bir ürün bulunamadı."}), 404
+        response = chatbot.process_user_input(user_input)
+        return jsonify(response)
     except Exception as e:
-        print(f"Hata oluştu : {e}")
-        return jsonify({"message": "Bir hata oluştu , lütfen tekrar deneyiniz."}), 500
-   
+        print(f"Hata: {e}")
+        return jsonify({"error": "Bir hata oluştu. Lütfen tekrar deneyin."}), 50
 
 if __name__ == '__main__':
     app.run(host="127.0.0.1",port=5000)
