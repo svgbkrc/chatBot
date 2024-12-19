@@ -58,9 +58,7 @@ class ChatBot:
         except Exception as e:
             print("En iyi telefonlar alınırken hata")
             return []
-    
-
-
+  
     def answer_question(self, question, context):
         """
         Soru-cevap modelini kullanarak cevap döndürür.
@@ -128,7 +126,7 @@ class ChatBot:
         normalized_input=' '.join(user_input.lower().split())
         print(f"Normalize edilen kulanıcı girdisi : {normalized_input}")
         best_match = process.extractOne(normalized_input, available_product_types)
-        if best_match and best_match[1] > 50:
+        if best_match and best_match[1] > 60:
             product_type=best_match[0]
             print(f"Eşleşen subcategory : {product_type}")
             return product_type
@@ -155,7 +153,7 @@ class ChatBot:
     # En iyi eşleşmeyi bulma
         best_match = process.extractOne(normalized_input, available_fullFeatures)
     
-        if best_match and best_match[1] > 50:  # Eşleşme skoru %60'tan büyükse
+        if best_match and best_match[1] > 70:  # Eşleşme skoru %60'tan büyükse
             feature = best_match[0]
             print(f"Eşleşen FullFeature: {feature}")
             return feature
@@ -168,25 +166,25 @@ class ChatBot:
         try :
             result = self.db.execute(query).fetchall()
             print(f"PrName sayısı:{len(result)}")
-            return result
+            return [row['prName'] for row in result]
         except Exception as e:
             print(f"Product Names alınırken hata oluştu: {e}")
-            return []
+            return []    
 
-    def match_names(self, user_input):
-        available_names = [row[0] for row in self.get_available_names()]
-        normalized_input = ' '.join(user_input.lower().split())
-        print(f"Normalize edilen girdi : {normalized_input}")
+    def match_names(self,user_input):
+        available_names = self.get_available_names()
+        normalized_input = ' '.join(user_input.lower().split())        
+        print(f"Kullanıcı girdisi : {normalized_input}")
 
-        matched_names = []
-        for name in available_names:
-            if any(word in name.lower() for word in normalized_input.split()):
-                matched_names.append(name)
-        if matched_names:
-            print(f"Eşleşen Ürünler: {matched_names}")        
-        else:
-            print("Eşleşen ürün ismi yok.")
-            return[]
+        contains_matches = [(prdct,100) for prdct in available_names if normalized_input in prdct]
+        all_matches =  contains_matches
+        filtered_matches = [match for match in all_matches if match[1] >= 50]
+        if not filtered_matches:
+            print("Kriterlere uygun ürün bulunamdı.")
+            return [{'message': 'Kriterlere uygun ürün bulunamadı.'}]
+        matched_products = [{'product_name': match[0], 'score':match[1]} for match in filtered_matches]
+        
+        return matched_products 
 
     def get_available_prices(self):
         query = "SELECT prPrice FROM Products WHERE prPrice IS NOT NULL"
