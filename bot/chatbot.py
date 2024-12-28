@@ -47,16 +47,27 @@ class ChatBot:
         top_phone_ids = [26,29,30]
 
         query = """
-        SELECT productID, prName, prPrice, picUrl, prColor, subcatName
-        FROM Products
-        WHERE productID IN ({})
-        """.format(",".join(map(str, top_phone_ids)))
+    SELECT 
+        p.productID, 
+        p.prName, 
+        p.prPrice, 
+        p.prColor, 
+        sc.subcatName,
+        (SELECT TOP 1 picUrl 
+         FROM Pictures 
+         WHERE Pictures.productID = p.productID 
+         ORDER BY picUrl) AS picUrl
+    FROM Products p
+    LEFT JOIN Subcategories sc ON p.subcategoryID = sc.subcategoryID
+    WHERE p.productID IN ({})
+    """.format(",".join(map(str, top_phone_ids)))
+
 
         try:
             result = self.db.execute(query).fetchall()
             return result
         except Exception as e:
-            print("En iyi telefonlar alınırken hata")
+            print(f"En iyi telefonlar alınırken hata : {str(e)}")
             return []
   
     def answer_question(self, question, context):
@@ -88,7 +99,7 @@ class ChatBot:
         query="SELECT DISTINCT LOWER(prColor) AS color FROM Products WHERE prColor IS NOT NULL"
         try:
             result = self.db.execute(query).fetchall()
-            print(f"Veritabanındaki renkler : {result}")
+            print(f"Veritabanındaki renkler : {len(result)}")
             return result
         except Exception as e:
             print(f"Renkleri alırken hata oluştu :{e}")
@@ -97,10 +108,10 @@ class ChatBot:
     def match_color_from_input(self, user_input):
         """Renkleri eşleştiriyoruz"""
         available_colors = [row[0] for row in self.get_available_colors()]
-        normalized_input= ' '.join(user_input.lower().split())
+        normalized_input= ' '.join(user_input.lower().strip().split())
         print(f"Kullanıcı girdisi normalize edilen : {normalized_input}")
         best_match = process.extractOne(normalized_input, available_colors)
-        if best_match and best_match[1] > 60:
+        if best_match and best_match[1] > 80:
             color = best_match[0]
             print(f"Eşleşen renk :{color}")
             return color
@@ -123,7 +134,7 @@ class ChatBot:
     def match_product_types(self, user_input):
         """Subcategorileri eşleştiriyoruz."""
         available_product_types = [row[0] for row in self.get_available_product_types()]
-        normalized_input=' '.join(user_input.lower().split())
+        normalized_input=' '.join(user_input.lower().strip().split())
         print(f"Normalize edilen kulanıcı girdisi : {normalized_input}")
         best_match = process.extractOne(normalized_input, available_product_types)
         if best_match and best_match[1] > 60:
@@ -139,7 +150,7 @@ class ChatBot:
         query = "SELECT DISTINCT LOWER(FullFeature) AS feature FROM ProductFeatures WHERE FullFeature IS NOT NULL"
         try:
             result = self.db.execute(query).fetchall()
-            print(f"Veritabanımızdaki featurelar : {result}")
+            print(f"Veritabanımızdaki feature sayısı : {len(result)}")
             return result
         except Exception as e:
             print(f"FullFeatureları alırken bir hata oluştu : {e}")
@@ -147,7 +158,7 @@ class ChatBot:
     
     def match_fullFeature(self, user_input):
         available_fullFeatures = [row[0] for row in self.get_available_fullFeatures()]
-        normalized_input = ' '.join(user_input.lower().split())
+        normalized_input = ' '.join(user_input.lower().strip().split())
         print(f"Kullanıcı girdisi normalize edilen: {normalized_input}")
     
     # En iyi eşleşmeyi bulma
@@ -161,31 +172,22 @@ class ChatBot:
             print("Eşleşen FullFeature bulunamadı.")
             return None
     
-    def get_available_names(self):
-        query = "SELECT LOWER(prName) AS prName FROM Products WHERE prName IS NOT NULL"
+    def match_names(self,user_input):
+        words = user_input.lower().strip().split()       
+        matched_names = []
+        query = " SELECT DISTINCT prName FROM Products WHERE prName IS NOT NULL"
         try :
             result = self.db.execute(query).fetchall()
-            print(f"PrName sayısı:{len(result)}")
-            return [row['prName'] for row in result]
-        except Exception as e:
-            print(f"Product Names alınırken hata oluştu: {e}")
-            return []    
-
-    def match_names(self,user_input):
-        available_names = self.get_available_names()
-        normalized_input = ' '.join(user_input.lower().split())        
-        print(f"Kullanıcı girdisi : {normalized_input}")
-
-        contains_matches = [(prdct,100) for prdct in available_names if normalized_input in prdct]
-        all_matches =  contains_matches
-        filtered_matches = [match for match in all_matches if match[1] >= 50]
-        if not filtered_matches:
-            print("Kriterlere uygun ürün bulunamdı.")
-            return [{'message': 'Kriterlere uygun ürün bulunamadı.'}]
-        matched_products = [{'product_name': match[0], 'score':match[1]} for match in filtered_matches]
-        
-        return matched_products 
-
+            print(f"Bulunan product names : {len(result)}")
+            product_names = [row[0].lower() for row in self.db.cursor.fetchall()]
+            for word in words:
+                if any(word in prName for prName in product_names):
+                    matched_names.append(word)
+            return matched_names
+        except Exception as ex:
+            print(f"Product name bulunamadı: {ex}")
+            return []
+                
     def get_available_prices(self):
         query = "SELECT prPrice FROM Products WHERE prPrice IS NOT NULL"
         try:
@@ -198,14 +200,14 @@ class ChatBot:
 
     def match_prices(self,user_input):
         available_prices = [row[0] for row in self.get_available_prices()]
-        normalized_input = ' '.join(user_input.lower().split())
+        normalized_input = ' '.join(user_input.lower().strip().split())
         best_match = process.extractOne(normalized_input, available_prices)
-        if best_match and best_match[1] > 60 :
+        if best_match and best_match[1] > 80 :
             price = best_match[0]
             print(f"Eşleşen price : {price}")
             return price
         else:
-            print("Eşleşen price yok.")
+            print("Eşleşen price yok. Skor : {best_match[1] if best_match else 'None'}")
             return None
 
     def extract_price_condition(self, user_input):
@@ -293,115 +295,109 @@ class ChatBot:
             conn.close()        
        
     def process_comprehensive_query(self, user_input):
-        # Girdi metnini virgül ile ayırarak parçalayalım
         filters = [part.strip() for part in user_input.split(',')]
-    
-        # Filtreleme için temel değişkenler
-        color = None
-        product_type = None
-        full_feature = None
-        price_condition = None
-        price_value = None
+        color, product_type, full_feature, price_condition, price_value = None, None, None, None, None
 
-    # Her bir filtreyi analiz edelim
         for filter_text in filters:
-          # Fiyat filtreleme
             price, condition = self.extract_price_condition(filter_text)
             if price and condition:
-               price_value = price
-               price_condition = condition
+               price_value, price_condition = price, condition
                continue
-            # Renk eşleşmesi
+
             matched_color = self.match_color_from_input(filter_text)
             if matched_color:
-                color = matched_color
-                continue
-        
-        # Ürün tipi (subcategory) eşleşmesi
+               color = matched_color
+               continue
+
             matched_product_type = self.match_product_types(filter_text)
             if matched_product_type:
-                product_type = matched_product_type
-                continue
-        
-        # Özellik (feature) eşleşmesi
+               product_type = matched_product_type
+               continue
+
             matched_feature = self.match_fullFeature(filter_text)
             if matched_feature:
                full_feature = matched_feature
                continue
-        
-        print(f"Filtreler: Color={color}, ProductType={product_type}, Feature={full_feature}, Price={price_value} Condition={price_condition}")
-        
-        conn = get_database_connection()
-        cursor = conn.cursor()
-        
+
         base_query = """
         SELECT DISTINCT p.productID, p.prName, p.prPrice, p.prColor, sc.subcatName,
-               (SELECT TOP 1 picUrl FROM Pictures WHERE Pictures.productID = p.productID ORDER BY picUrl) AS picUrl
+        (SELECT TOP 1 picUrl FROM Pictures WHERE Pictures.productID = p.productID ORDER BY picUrl) AS picUrl
         FROM Products p
         LEFT JOIN ProductFeatures pf ON p.productID = pf.productID
-        LEFT JOIN ProductFeatureDefinitions pfd ON pf.productFeatureID = pfd.productFeatureID
         LEFT JOIN Subcategories sc ON p.subcategoryID = sc.subcategoryID
-        LEFT JOIN Pictures pic ON p.productID = pic.productID
         WHERE 1=1
         """
         params = []
 
-         # Fiyat filtreleme ekleme
         if price_condition == "ucuz":
-           base_query += " AND p.prPrice < ?"
-           params.append(price_value)
+          base_query += " AND p.prPrice < ?"
+          params.append(price_value)
         elif price_condition == "pahalı":
-           base_query += " AND p.prPrice > ?"
-           params.append(price_value)
+            base_query += " AND p.prPrice > ?"
+            params.append(price_value)
 
-    # Renk filtresi ekleme
         if color:
            base_query += " AND LOWER(p.prColor) LIKE LOWER(?)"
            params.append(f"%{color}%")
 
-    # Ürün tipi filtresi ekleme
         if product_type:
            base_query += " AND LOWER(sc.subcatName) LIKE LOWER(?)"
            params.append(f"%{product_type}%")
 
-    # Özellik filtresi ekleme
         if full_feature:
            base_query += " AND LOWER(pf.FullFeature) LIKE LOWER(?)"
            params.append(f"%{full_feature}%")
 
-        base_query += " GROUP BY p.productID, p.prPrice, p.prColor, p.prName, sc.subcatName"
-        # Sorguyu çalıştıralım
-        print(f"Çalıştırılan sorgu: {base_query}")
-        print(f"Parametreler: {params}")
-        cursor.execute(base_query, params)
-        rows = cursor.fetchall()
-        conn.close()
-
-    # Sonuçları JSON formatında döndürelim
-        if rows:
+        try:
+           conn = self.db
+           cursor = conn.cursor()
+           cursor.execute(base_query, params)
+           rows = cursor.fetchall()
            return [
             {
                 "name": row[1],
                 "price": row[2],
                 "color": row[3],
                 "subcategory": row[4],
-                "picUrl": row[5],
-                "self_link": f"/product/{row[0]}",
-                "productID": row[0]
-            } for row in rows
+                "image_url": row[5],
+            }
+            for row in rows
         ]
-        else:
-            return [{"message": "Kriterlere uygun ürün bulunamadı."}]
-    
+        except Exception as e:
+           print(f"Error querying products: {e}")
+           return []
+
+    def contains_kwords(self, user_input, keywords):
+        normalized_input = user_input.lower().split()
+        return all(any(keyword in word for word in normalized_input) for keyword in keywords)
+
+    def check_feedback (self,user_input):
+        feedback_keywords = ["değerlendirmek", "geri bildirim", "şikayet","öneri", "yorum", "feedback"]
+        user_input = user_input.lower()
+        for kw in feedback_keywords:
+            if kw in user_input:
+                help_message = """
+                <ul>
+                     <li> Şikayet ve önerileriniz için lütfen <a href="/Home/Contact"> buraya tıklayın</a>.</li>
+                </ul>
+                """
+                return help_message
+            
+        return None
+
     def get_user_query(self, user_input):
         """
         Kullanıcının mesajını analiz eder.
         """
-        color = self.match_color_from_input(user_input)
-        product_type = self.match_product_types(user_input)
-        full_feature = self.match_fullFeature(user_input)
-        price = self.match_prices(user_input)
-        prName = self.match_names(user_input)
+
+        tokens = [token.strip() for token in user_input.split(',')]
+        color, product_type, full_feature, price, prName = None,None,None,None,None
+        for token in tokens:
+            color = self.match_color_from_input(token)
+            product_type = self.match_product_types(token)
+            full_feature = self.match_fullFeature(token)
+            price = self.match_prices(token)
+            prName = self.match_names(token)
         
         print(f"Elde edilen değerler : {color} , {product_type} , {full_feature} , {price}, {prName}")
         return color, product_type, full_feature, price, prName
@@ -447,18 +443,24 @@ class ChatBot:
         if price:
             base_query += f" AND p.prPrice LIKE ?"
             params.append(f"%{price}%")
+        
+        matched_names = self.match_names(user_input)
+        prName_conditions = []
         if prName:
-            base_query += f"AND p.prName LIKE ?"
+            prName_conditions.append("LOWER(p.prName) LIKE LOWER(?)")
             params.append(f"%{prName}%")
+        for name in matched_names:
+            prName_conditions.append("LOWER(p.prName) LIKE LOWER(?)")
+            params.append(f"%{prName}%")
+        
+        if prName_conditions:
+            base_query += f" AND ({' OR '.join(prName_conditions)})"
 
         base_query, params = self.filter_by_price(user_input,base_query, params)
 
         print(f"Son halindeki sorgu :{base_query}")
         print(f"Parametreler: {params}")
-        base_query += """        
-        GROUP BY p.productID, p.prPrice, p.prColor, p.prName, sc.subcatName
-        """
-
+        
         print(f"Çalıştırılan sorgu : {base_query}")
         cursor.execute(base_query, params)
         rows = cursor.fetchall()
@@ -468,16 +470,41 @@ class ChatBot:
         
         return rows
   
+    
+
     def process_user_input(self, user_input):
+
+        feedback_response = self.check_feedback(user_input)
+        if feedback_response:
+            return[{"message" : feedback_response}]     
 
         greeting_response = self.check_greeting(user_input)
         if greeting_response:
-            return[{"message": greeting_response}]
-        
+            return[{"message": greeting_response}]        
 
         small_talk_response = self.check_small_talk(user_input)
         if small_talk_response:
             return[{"message": small_talk_response}]
+
+        if self.contains_kwords(user_input, ["kargo", "takip"]):  
+            help_message = """
+            <ul>
+                <li>Kargo ve takip bilgisi için: <a href="https://www.ptt.gov.tr/">PTT</a></li>
+            </ul>
+            """         
+            return [{"message": help_message}]
+        
+        if self.contains_kwords(user_input, ["kargo", "bilgi"]):
+            help_message = """
+            <ul>
+                <li>1000 TL ve üzeri alışverişlerinizde kargo bedavadır.</li>
+                <li>1000 TL ve altı alışverişlerinizde kargo ücretimiz tüm Türkiye'de sabit ve 50 TL'dir.</li>                
+                <li>13:00'a kadar verilen siparişler aynı gün kargolanır.</li>
+                <li>Kargo şirketi olarak PTT ile anlaşmalıyız.</li>
+                <li>Kargo ve takip bilgisi için: <a href="https://www.ptt.gov.tr/">PTT</a></li>
+            </ul>
+            """           
+            return [{"message" : help_message}]
 
         if "en iyi telefonlar" in user_input.lower():
             top_phones = self.get_top_phones()  # En iyi telefonları getir
@@ -492,13 +519,8 @@ class ChatBot:
                 } for row in top_phones]
             else:
                 return [{"message": "Şu anda en iyi telefonlar listesi boş."}]
-                
-        if ',' in user_input:
-            filtred_products = self.process_comprehensive_query(user_input)
-            return filtred_products
 
         
-
         color, product_type, full_feature, price, prName= self.get_user_query(user_input)
         print(f"Color: {color}, Product Type: {product_type}, Feature: {full_feature}, Price:{price}, Product Name:{prName}")  # Debug çıktısı
         products = self.fetch_products(color, product_type, full_feature, price, prName, user_input)
@@ -538,7 +560,7 @@ class ChatBot:
         else:
             return [{"message": "Fiyat koşulu belirlenemedi."}]
   
-
+    
 # Flask Uygulaması
 app = Flask(__name__)
 chatbot = ChatBot()
