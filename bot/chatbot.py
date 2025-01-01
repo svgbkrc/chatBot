@@ -44,10 +44,9 @@ class ChatBot:
         return None
 
     def get_top_phones(self):
-        top_phone_ids = [26,29,30]
-
-        query = """
-    SELECT 
+        subcat_id = 45
+        query = f"""
+    SELECT TOP 5
         p.productID, 
         p.prName, 
         p.prPrice, 
@@ -59,10 +58,9 @@ class ChatBot:
          ORDER BY picUrl) AS picUrl
     FROM Products p
     LEFT JOIN Subcategories sc ON p.subcategoryID = sc.subcategoryID
-    WHERE p.productID IN ({})
-    """.format(",".join(map(str, top_phone_ids)))
-
-
+    WHERE p.subcategoryID = {subcat_id}
+    ORDER BY p.prPrice DESC
+    """
         try:
             result = self.db.execute(query).fetchall()
             return result
@@ -70,6 +68,31 @@ class ChatBot:
             print(f"En iyi telefonlar alınırken hata : {str(e)}")
             return []
   
+    def get_top_computers(self):
+        subcat_id = 46
+        query = f"""
+        SELECT TOP 5
+           p.productID, 
+           p.prName, 
+           p.prPrice, 
+           p.prColor, 
+           sc.subcatName,
+           (SELECT TOP 1 picUrl 
+               FROM Pictures 
+               WHERE Pictures.productID = p.productID 
+               ORDER BY picUrl) AS picUrl
+            FROM Products p
+            LEFT JOIN Subcategories sc ON p.subcategoryID = sc.subcategoryID
+            WHERE p.subcategoryID = {subcat_id}
+            ORDER BY p.prPrice DESC
+        """
+        try:
+            result = self.db.execute(query).fetchall()
+            return result
+        except Exception as e:
+            print(f"En iyi computers alınırken hata : {e}")
+            return []
+
     def answer_question(self, question, context):
         """
         Soru-cevap modelini kullanarak cevap döndürür.
@@ -137,7 +160,7 @@ class ChatBot:
         normalized_input=' '.join(user_input.lower().strip().split())
         print(f"Normalize edilen kulanıcı girdisi : {normalized_input}")
         best_match = process.extractOne(normalized_input, available_product_types)
-        if best_match and best_match[1] > 60:
+        if best_match and best_match[1] > 70:
             product_type=best_match[0]
             print(f"Eşleşen subcategory : {product_type}")
             return product_type
@@ -172,21 +195,28 @@ class ChatBot:
             print("Eşleşen FullFeature bulunamadı.")
             return None
     
-    def match_names(self,user_input):
-        words = user_input.lower().strip().split()       
-        matched_names = []
-        query = " SELECT DISTINCT prName FROM Products WHERE prName IS NOT NULL"
-        try :
+    def get_available_names(self):
+        query = "SELECT DISTINCT LOWER(prName) AS namee FROM Products WHERE prName IS NOT NULL"
+        try:
             result = self.db.execute(query).fetchall()
-            print(f"Bulunan product names : {len(result)}")
-            product_names = [row[0].lower() for row in self.db.cursor.fetchall()]
-            for word in words:
-                if any(word in prName for prName in product_names):
-                    matched_names.append(word)
-            return matched_names
-        except Exception as ex:
-            print(f"Product name bulunamadı: {ex}")
+            print(f"Veritabanındaki prName sayısı : {len(result)}")
+            return result
+        except Exception as e:
+            print(f"Product nameleri alırken problem oluştu : {e}")
             return []
+        
+    def match_names(self,user_input):
+        available_names = [row[0] for row in self.get_available_names()]
+        normalized_input = ' '.join(user_input.lower().strip().split())
+        print(f"Normlize edilen kullanıcı girdisi : {normalized_input}")
+        best_match = process.extractOne(normalized_input, available_names)
+        if best_match and best_match[1] > 80:
+            name = best_match[0]
+            print(f"Eşelşen prName : {name}")
+            return name
+        else:
+            print("Eşeleşn name bulunamadı.")
+            return None
                 
     def get_available_prices(self):
         query = "SELECT prPrice FROM Products WHERE prPrice IS NOT NULL"
@@ -372,7 +402,7 @@ class ChatBot:
         return all(any(keyword in word for word in normalized_input) for keyword in keywords)
 
     def check_feedback (self,user_input):
-        feedback_keywords = ["değerlendirmek", "geri bildirim", "şikayet","öneri", "yorum", "feedback"]
+        feedback_keywords = ["değerlendirmek","feedback"]
         user_input = user_input.lower()
         for kw in feedback_keywords:
             if kw in user_input:
@@ -402,7 +432,7 @@ class ChatBot:
         print(f"Elde edilen değerler : {color} , {product_type} , {full_feature} , {price}, {prName}")
         return color, product_type, full_feature, price, prName
 
-    def fetch_products(self, color, product_type, full_feature, price, prName, user_input):
+    def fetch_products(self, color=None, product_type=None, full_feature=None, price=None, prName=None, user_input=None):
         """
         Kullanıcı kriterlerine göre veritabanından ürünleri getirir.
         """
@@ -443,18 +473,10 @@ class ChatBot:
         if price:
             base_query += f" AND p.prPrice LIKE ?"
             params.append(f"%{price}%")
-        
-        matched_names = self.match_names(user_input)
-        prName_conditions = []
         if prName:
-            prName_conditions.append("LOWER(p.prName) LIKE LOWER(?)")
-            params.append(f"%{prName}%")
-        for name in matched_names:
-            prName_conditions.append("LOWER(p.prName) LIKE LOWER(?)")
-            params.append(f"%{prName}%")
+            base_query += f" AND LOWER(p.prName) LIKE LOWER(?)"
+            params.append(f"%{prName}%")       
         
-        if prName_conditions:
-            base_query += f" AND ({' OR '.join(prName_conditions)})"
 
         base_query, params = self.filter_by_price(user_input,base_query, params)
 
@@ -469,8 +491,138 @@ class ChatBot:
         print(rows)
         
         return rows
-  
+     
+    def get_user_query_coma(self, user_input):
+        """
+        Kullanıcının mesajını analiz eder.
+        """
+        tokens = [token.strip() for token in user_input.split(',')]
+        color, product_type, full_feature, price = None, None, None, None
+        for token in tokens:
+            print(f"Token : {token}")
+                         
+        # Her bir token'ı sırasıyla kontrol ediyoruz
+            if not color:
+               color = self.match_color_from_input(token)
+        
+            if not product_type and not color:
+               product_type = self.match_product_types(token)
+        
+            if not full_feature and not color and not product_type:
+               full_feature = self.match_fullFeature(token)
+        
+            if not price and not color and not product_type and not full_feature:
+                price = self.match_prices(token)
+
+            
+
+        print(f"Elde edilen değerler : {color} , {product_type} , {full_feature} , {price}")
+        return color, product_type, full_feature, price
+
+    def fetch_coma_products(self, color=None, product_type=None, full_feature=None, price=None, user_input=None):
+        try :
+            conn = get_database_connection()
+            cursor = conn.cursor()
+
+            base_query = """
+            SELECT DISTINCT 
+            p.productID as productID,
+            p.prName AS prName, 
+            p.prPrice AS prPrice ,
+            p.prColor AS prColor,         
+            sc.subcatName AS subcatName,
+            (SELECT TOP 1 picUrl 
+            FROM Pictures 
+            WHERE Pictures.productID = p.productID 
+            ORDER BY picUrl ) AS picUrl
+            FROM Products p
+            LEFT JOIN ProductFeatures pf ON p.productID = pf.productID
+            LEFT JOIN ProductFeatureDefinitions pfd ON pf.productFeatureID = pfd.productFeatureID
+            LEFT JOIN Subcategories sc ON p.subcategoryID = sc.subcategoryID
+            LEFT JOIN Pictures pic ON p.productID = pic.productID
+            WHERE 1=1
+            """  
+            params = []
+            
+            if color: 
+               base_query += f" AND LOWER(p.prColor) LIKE LOWER(?)"
+               params.append(f"%{color}%")
+
+            if product_type:
+               base_query += f" AND LOWER(sc.subcatName) LIKE LOWER(?)"
+               params.append(f"%{product_type}%")
+
+            if full_feature:
+               base_query += f" AND LOWER(pf.FullFeature) LIKE LOWER(?)"
+               params.append(f"%{full_feature}%")
+
+            if price:
+                base_query += f" AND p.prPrice LIKE ?"
+                params.append(f"%{price}%")
+            
+            cursor.execute(base_query, params)
+            rows = cursor.fetchall()
+            conn.close()
+            
+            print(f"Bulunan ürün sayısı : {len(rows)}")
+            print(rows)
+        
+            return rows
     
+        except Exception as e:
+            print(f"Hata: {str(e)}")
+            return []
+  
+    def process_coma_separated_input(self, user_input):
+        try:
+            parts = [part.strip() for part in user_input.split(",")]
+            results = []
+            
+            color = None
+            product_type = None
+            features= []
+            price=None
+
+            for part in parts:
+                normalized_input = ' '.join(part.lower().strip().split())
+                print(f"Normalize edilen partlar : {normalized_input}")               
+
+                if not color and self.match_color_from_input(part):
+                    color=self.match_color_from_input(part)
+
+                elif not product_type and self.match_product_types(part):
+                    product_type = self.match_product_types(part)
+
+                elif self.match_fullFeature(part):
+                    features.append(self.match_fullFeature(part))
+
+                elif not price and self.match_prices(part):
+                    price = self.match_prices(part)             
+
+            full_feature = ", ".join(features) if features else None
+            print(f" Elde edilen değerler :    Color: {color}, Product Type: {product_type}, Feature: {full_feature}, Price:{price}")  # Debug çıktısı
+                
+            products = self.fetch_coma_products(color, product_type, full_feature, price, user_input)
+            
+            if products:
+                results.extend([{
+                    "productID": row[0],
+                    "name": row[1] if row[1] else "Ürün adı yok",
+                    "price": row[2] if row[2] else "0.00",
+                    "color": row[3] if row[3] else "Ürün rengi bilinmiyor",
+                    "subcategory": row[4] if row[4] else "Ürün alt kategorisi bilinmiyor",
+                    "picUrl": row[5] if row[5] else "Ürün fotoğrafı yok",
+                } for row in products])
+            else :
+                results.append({"message" : f"'{user_input}' kriterlerine uygun ürün bulunamadı."})
+                
+            if results:
+                return results
+            else:
+                return [{"message ": "Hiçbir kritere uygun ürün bulunamadı."}]
+        
+        except Exception as e : 
+            return [{"message" : f"Hata {str(e)}"}]
 
     def process_user_input(self, user_input):
 
@@ -520,6 +672,21 @@ class ChatBot:
             else:
                 return [{"message": "Şu anda en iyi telefonlar listesi boş."}]
 
+        if any (keyword in user_input.lower() for keyword in ["en iyi bilgisayarlar", "en iyi laptoplar"]):
+            top_compts = self.get_top_computers()
+            if top_compts:
+                return [{"productID": row[0],
+                         "name": row[1] if row[1] else "Ürün adı yok", 
+                         "price": row[2] if row[2] else "0.00", 
+                         "color": row[3] if row[3] else "Ürün rengi bilinmiyor",
+                         "subcategory": row[4] if row[4] else "Ürün subcategory'si bilinmiyor",
+                         "picUrl": row[5] if len(row) > 5 else None,
+                        } for row in top_compts]
+            else:
+                return [{"message" : "Şu anda en iyi bilgisayarlar getirilemiyor."}]
+
+        if "," in user_input:
+            return self.process_coma_separated_input(user_input)
         
         color, product_type, full_feature, price, prName= self.get_user_query(user_input)
         print(f"Color: {color}, Product Type: {product_type}, Feature: {full_feature}, Price:{price}, Product Name:{prName}")  # Debug çıktısı
