@@ -415,6 +415,78 @@ class ChatBot:
             
         return None
 
+    def format_product_response(self, product_list):
+        return [{
+           "productID": row[0],
+           "name": row[1] if row[1] else "Ürün adı yok", 
+           "price": row[2] if row[2] else "0.00", 
+           "color": row[3] if row[3] else "Ürün rengi bilinmiyor",
+           "subcategory": row[4] if row[4] else "Ürün subcategory'si bilinmiyor",
+           "picUrl": row[5] if len(row) > 5 else None,
+        } for row in product_list]
+
+    def is_laptop(self, user_input):
+        if "laptop" in user_input.lower():
+            return "bilgisayar"
+        return None
+
+    def get_products_by_features(self,user_input):
+        features = [part.strip() for part in user_input.split(";")]
+        results = []
+        cleaned_features = []
+        for feature in features:
+            matched_feature = self.match_fullFeature(feature)
+            if matched_feature:
+               print(f"Eşleşen özellik : {matched_feature}")
+               cleaned_features.append(matched_feature)
+
+            if not cleaned_features:
+                return [{"message": "Hiçbir özellik belirtilmedi"}]
+
+        query = """
+        SELECT p.productID , p.prName, p.prPrice, p.prColor, p.subcatName, pic.picUrl
+        FROM Products p
+        INNER JOIN (
+            SELECT productID, MIN(picUrl) AS picUrl
+            FROM Pictures
+            GROUP BY productID
+        )pic ON p.productId = pic.productID        
+        WHERE p.productID IN (
+            SELECT pf.productID
+            FROM ProductFeatures pf 
+            WHERE 
+        """
+
+        conditions = [f"LOWER(pf.FullFeature) = '{feature}'" for feature in cleaned_features]
+
+        query += " "+ " OR ".join(conditions)
+        query +=  """
+        GROUP BY pf.productID
+        HAVING COUNT(DISTINCT pf.FullFeature) = ?
+        )
+        """
+        query = query.replace("?", str(len(cleaned_features)))
+
+        print(f"Generated SQL Query : {query}")
+        products = self.db.execute(query)
+
+        if products:
+            # Ürünleri döndür
+            results.extend([{
+                "productID": row[0],
+                "name": row[1] if row[1] else "Ürün adı yok",
+                "price": row[2] if row[2] else "0.00",
+                "color": row[3] if row[3] else "Ürün rengi bilinmiyor",
+                "subcategory": row[4] if row[4] else "Ürün alt kategorisi bilinmiyor",
+                "picUrl": row[5] if row[5] else  "Ürün fotoğrafı yok",
+            } for row in products])
+        else:
+            results.append({"message": "Belirtilen özelliklere sahip ürün bulunamadı."})
+        if results:
+            return results
+        else:
+            return [{"message": "Hiçbir kritere uygun ürün bulunamadı."}]
+
     def get_user_query(self, user_input):
         """
         Kullanıcının mesajını analiz eder.
@@ -574,6 +646,7 @@ class ChatBot:
             return []
   
     def process_coma_separated_input(self, user_input):
+               
         try:
             parts = [part.strip() for part in user_input.split(",")]
             results = []
@@ -625,7 +698,7 @@ class ChatBot:
             return [{"message" : f"Hata {str(e)}"}]
 
     def process_user_input(self, user_input):
-
+        
         feedback_response = self.check_feedback(user_input)
         if feedback_response:
             return[{"message" : feedback_response}]     
@@ -671,6 +744,9 @@ class ChatBot:
                 } for row in top_phones]
             else:
                 return [{"message": "Şu anda en iyi telefonlar listesi boş."}]
+        
+        if "laptop" in user_input.lower():
+           user_input = user_input.replace("laptop", "bilgisayar")
 
         if any (keyword in user_input.lower() for keyword in ["en iyi bilgisayarlar", "en iyi laptoplar"]):
             top_compts = self.get_top_computers()
@@ -684,6 +760,9 @@ class ChatBot:
                         } for row in top_compts]
             else:
                 return [{"message" : "Şu anda en iyi bilgisayarlar getirilemiyor."}]
+
+        if ";" in user_input:
+            return self.get_products_by_features(user_input)
 
         if "," in user_input:
             return self.process_coma_separated_input(user_input)
