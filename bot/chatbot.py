@@ -26,7 +26,7 @@ class ChatBot:
         self.model = AutoModelForQuestionAnswering.from_pretrained("lserinol/bert-turkish-question-answering")
 
     def check_greeting(self,user_input):
-        greetings = ['merhaba','günaydın','iyi akşamlar','günaydin','selam','hey','iyi günler', 'hayırlı günler','selamunaleyküm','merhabalar','iyi geceler']
+        greetings = ['merhaba','günaydın','iyi akşamlar','günaydin','selam','hey','iyi günler', 'hayırlı günler','selamunaleyküm','merhabalar','iyi geceler','chatbot','kanka','dostum']
         user_input = user_input.lower() #küçük harfe çevirmeliyiz
 
         for greeting in greetings:
@@ -34,6 +34,15 @@ class ChatBot:
                 return f"Merhaba , size nasıl yardımcı olabilirim ?"
         return None
 
+    def check_appreciation(self, user_input):
+        appreciations = ['teşekkür','sağol','eyvallah','allah razı olsun','thanks','tşk ederim','iyi ki varsın','yardımcı oldun']
+        user_input=user_input.lower()
+
+        for appreciation in appreciations:
+            if appreciation in user_input:
+                return f"Rica ederim, size yardımcı olmaktan mutluluk duyarım!"
+            return None
+        
     def check_small_talk (self, user_input):
         small_talks = ['nasılsın','naber','ne haber','iyi misin','ne var ne yok']
         user_input = user_input.lower()
@@ -42,6 +51,15 @@ class ChatBot:
             if small_talk in user_input:
                 return f"Harikayım ! Teşekkür ederim. Size nasıl yardımcı olabilirim ?"
         return None
+
+    def check_goodbye(self, user_input):
+        goodbyes = ["Hoşçakal","Bye","Görüşürüz"]
+        user_input = user_input.lower()
+
+        for goodbye in goodbyes:
+            if goodbye in user_input:
+                return f"Hoşçakalın..."
+
 
     def get_top_phones(self):
         subcat_id = 45
@@ -93,6 +111,7 @@ class ChatBot:
             print(f"En iyi computers alınırken hata : {e}")
             return []
 
+
     def answer_question(self, question, context):
         """
         Soru-cevap modelini kullanarak cevap döndürür.
@@ -115,6 +134,7 @@ class ChatBot:
             print(f"Error analyzing request: {e}")
             return None
     
+
     def get_available_colors(self):
         """
         Veritabanında tanımlı renkler döncevej
@@ -160,7 +180,7 @@ class ChatBot:
         normalized_input=' '.join(user_input.lower().strip().split())
         print(f"Normalize edilen kulanıcı girdisi : {normalized_input}")
         best_match = process.extractOne(normalized_input, available_product_types)
-        if best_match and best_match[1] > 70:
+        if best_match and best_match[1] > 80:
             product_type=best_match[0]
             print(f"Eşleşen subcategory : {product_type}")
             return product_type
@@ -168,6 +188,38 @@ class ChatBot:
             print("Eşelşen subcategory bulunamadı.")
             return None
     
+    def get_available_featureNames(self):
+        """
+        Veritabanında tanımlı futurelar döncevek
+        """
+        query="SELECT DISTINCT LOWER(featureName) AS fname FROM ProductFeatures WHERE featureName IS NOT NULL"
+        try:
+            result = self.db.execute(query).fetchall()
+            return result
+        except Exception as e:
+            print(f"FeatureName alırken hata oluştu :{e}")
+            return []
+    
+    def preprocess_user_input(self, user_input):   
+        cleaned_input = re.sub(r"\b('?[eaiou] sahip|ve|ile|,)\b", "", user_input, flags=re.IGNORECASE)
+        # Boşlukları düzenle
+        cleaned_input = ' '.join(cleaned_input.split())
+        return cleaned_input.lower()
+
+    def match_featureName_from_input(self, user_input):
+        """Featurename eşleştiriyoruz"""
+        available_featureNames = [row[0] for row in self.get_available_featureNames()]
+        normalized_input= self.preprocess_user_input(user_input)
+        print(f"Kullanıcı girdisi normalize edilen : {normalized_input}")
+        best_match = process.extractOne(normalized_input, available_featureNames, scorer=fuzz.partial_ratio)
+        if best_match and best_match[1] > 80:
+            feature = best_match[0]
+            print(f"Eşleşen featureName :{feature}")
+            return feature
+        else:
+            print("Eşleşen featureName bulunamadı.")
+            return None         
+
     def get_available_fullFeatures(self):
         """ Veritabanında tanımlı fullFeatureları almak için"""
         query = "SELECT DISTINCT LOWER(FullFeature) AS feature FROM ProductFeatures WHERE FullFeature IS NOT NULL"
@@ -195,6 +247,82 @@ class ChatBot:
             print("Eşleşen FullFeature bulunamadı.")
             return None
     
+    def process_feature_value(self,feature_value):
+        try:
+            feature_value_int = int(feature_value)
+            return feature_value_int
+        except ValueError:
+            return None    
+    
+    def find_higher_features(self, user_input):
+        normalized_input = self.preprocess_user_input(user_input)
+        match = re.search(r"(\d+)", normalized_input)
+        if not match:
+            return None
+        feature_value = match.group(1)
+        print(f"Ayıklanan özellik değeri: {feature_value}")
+        
+        feature = self.match_featureName_from_input(normalized_input)
+        if not feature:
+            print("Özellik bulunamadı")
+            return [{"message": "Özellik eşleşmedi."}]
+
+        subcategory = self.match_product_types(normalized_input)
+        if not subcategory:
+            print("Alt kategori bulunamadı.")
+            return [{"message": "Alt kategori eşleşmedi."}]
+
+        query = """
+        SELECT 
+            p.productID AS productID,
+            p.prName AS prName, 
+            p.prPrice AS prPrice,
+            p.prColor AS prColor,
+            sc.subcatName AS subcatName,
+            Pictures.picUrl AS picUrl,
+            f.featureValue  AS feature_value, 
+            f.featureName AS featureName
+        FROM Products p
+        LEFT JOIN Subcategories sc ON p.subcategoryID = sc.subcategoryID
+        LEFT JOIN ProductFeatures f ON p.productID = f.productID
+        LEFT JOIN (
+            SELECT 
+                productID, 
+                MIN(picUrl) AS picUrl 
+            FROM Pictures 
+            GROUP BY productID
+        ) AS Pictures ON Pictures.productID = p.productID
+        WHERE LOWER(sc.subcatName) = ? 
+            AND LOWER(f.featureName) = ? 
+            AND TRY_CAST(f.featureValue AS INT) IS NOT NULL
+            AND TRY_CAST(f.featureValue AS INT) > ?
+        ORDER BY TRY_CAST(f.featureValue AS INT) DESC;
+
+        """
+
+        try:
+            params = (subcategory, feature, feature_value)
+            products = self.db.execute(query, params).fetchall()
+            print(f"Sorgudan dönen ürün sayısı: {len(products)}")  # Kaç ürün döndüğünü yazdır
+            if products:
+                print(f"Sorgudan dönen ürünler: {products}")  # Ürünlerin listesini yazdır
+                return [{
+                    "productID": row[0],
+                    "name": row[1] if row[1] else "Ürün adı yok",
+                    "price": row[2] if row[2] else "0.00",
+                    "color": row[3] if row[3] else "Ürün rengi bilinmiyor",
+                    "subcategory": row[4] if row[4] else "Ürün alt kategorisi bilinmiyor",
+                    "picUrl": row[5] if row[5] else "Ürün fotoğrafı yok",
+                    "feature_value": row[6] if row[6] else "0",
+                } for row in products]
+            else:
+                return [{"message": "Uygun ürün bulunamadı."}]
+        except Exception as e:
+            print(f"Veritabanı find_higher_feature sorgusunda hata oluştu: {e}")
+            return [{"message": "Bir hata oluştu."}]
+
+
+
     def get_available_names(self):
         query = "SELECT DISTINCT LOWER(prName) AS namee FROM Products WHERE prName IS NOT NULL"
         try:
@@ -229,31 +357,34 @@ class ChatBot:
             return []
 
     def match_prices(self,user_input):
-        available_prices = [row[0] for row in self.get_available_prices()]
-        normalized_input = ' '.join(user_input.lower().strip().split())
-        best_match = process.extractOne(normalized_input, available_prices)
-        if best_match and best_match[1] > 80 :
-            price = best_match[0]
-            print(f"Eşleşen price : {price}")
-            return price
+        match = re.search(r'\d+', user_input)
+        if match:
+            price = int(match.group(0))
+            available_prices = [row[0] for row in self.get_available_prices()]
+            if price in available_prices:
+                print(f"Eşleşen fiyat :{price}")
+            else:
+                print(f"Eşleşen price yok: {price}")
+                return None
         else:
-            print("Eşleşen price yok. Skor : {best_match[1] if best_match else 'None'}")
+            print("Geçerli bir fiyat yok.")
             return None
 
+    #Çalışmadı
     def extract_price_condition(self, user_input):
         match = re.search(r'(\d+)\s*TL?', user_input)
-
         if match:
             price = int(match.group(1))
             condition = None
-            if fuzz.partial_ratio("ucuz",user_input.lower()) > 70:
+            if fuzz.partial_ratio("ucuz",user_input.lower()) > 90:
                 condition = "ucuz"
-            elif fuzz.partial_ratio("pahalı",user_input.lower()) > 70:
+            elif fuzz.partial_ratio("pahalı",user_input.lower()) > 90:
                 condition = "pahalı"
             
             if condition:
                 return price, condition
         return None, None
+
 
     def filter_by_price (self, user_input, base_query, params):
         """
@@ -281,49 +412,70 @@ class ChatBot:
 
         return base_query, params   
 
-    def get_extreme_price_products(self, price_condition, subcategory_name, price=None):
+    def get_extreme_price_products(self, price_condition, subcategory_name):
         """
         Verilen price_condition'a göre (en pahalı ya da en ucuz) subcategory'ye ait ürünleri getirir.
         :param price_condition: 'ucuz' veya 'pahalı'
         :param subcategory_name: Subcategory ismi (örneğin: 'Telefon')
         :return: En pahalı veya en ucuz ürünler
         """
-        conn = self.db.connect()  # Veritabanı bağlantısını al
-        cursor = conn.cursor()
-
-        # Koşula göre SQL sorgusunu belirleyelim
-        if price_condition == 'ucuz':
-            query = """
-            SELECT TOP 3 p.productID, p.prName, p.prPrice, sc.subcatName
-            FROM Products p
-            JOIN Subcategories sc ON p.subcategoryID = sc.subcategoryID
-            WHERE sc.subcatName = ?
-            ORDER BY p.prPrice ASC
-
-            """
-        elif price_condition == 'pahalı':
-            query = """
-            SELECT TOP 3 p.productID, p.prName, p.prPrice, sc.subcatName
-            FROM Products p
-            JOIN Subcategories sc ON p.subcategoryID = sc.subcategoryID
-            WHERE sc.subcatName = ?
-            ORDER BY p.prPrice DESC  
-            """
-        else:
-            print("geçersiz fiyat")
-            return []
+        conn = None
+        cursor = None
         try:
+            conn = get_database_connection()
+            print("Veritabanına bağlandı.")
+            cursor = conn.cursor()
+        # Koşula göre SQL sorgusunu belirleyelim
+            
+            if price_condition == 'en ucuz':
+                query = """
+                SELECT TOP 3 p.productID, p.prName, p.prPrice, sc.subcatName,
+                (SELECT TOP 1 picUrl 
+                    FROM Pictures 
+                    WHERE Pictures.productID = p.productID 
+                    ORDER BY picUrl) AS picUrl
+                FROM Products p
+                JOIN Subcategories sc ON p.subcategoryID = sc.subcategoryID
+                WHERE sc.subcatName = ?
+                ORDER BY p.prPrice ASC
+                """ 
+            elif price_condition == 'en pahalı':               
+                query = """
+                SELECT TOP 3 p.productID, p.prName, p.prPrice, sc.subcatName,
+                    (SELECT TOP 1 picUrl 
+                    FROM Pictures 
+                    WHERE Pictures.productID = p.productID 
+                    ORDER BY picUrl) AS picUrl    
+                FROM Products p
+                JOIN Subcategories sc ON p.subcategoryID = sc.subcategoryID
+                WHERE sc.subcatName = ?
+                ORDER BY p.prPrice DESC  
+                """    
+               
+            else:
+                print("geçersiz fiyat")
+                return []
+
+            print(f"Sorgumuz get_extreme : {query}")
+            print(f"Subcategory : {subcategory_name}")
+            print(f"Eşeleşn condition : {price_condition}")
+
             cursor.execute(query, (subcategory_name,))
             result = cursor.fetchall()
+           
             print(f"{price_condition.capitalize()} ürünler : {result}")  
             return result
+       
         except Exception as e:
-            print(f"Ürünleri alırken hata : {e}")
+            print(f"Ürünleri get extremealırken hata : {e}")
             return []
         finally:
-            cursor.close()
-            conn.close()        
-       
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
+            
+    
     def process_comprehensive_query(self, user_input):
         filters = [part.strip() for part in user_input.split(',')]
         color, product_type, full_feature, price_condition, price_value = None, None, None, None, None
@@ -396,7 +548,8 @@ class ChatBot:
         except Exception as e:
            print(f"Error querying products: {e}")
            return []
-
+    
+    
     def contains_kwords(self, user_input, keywords):
         normalized_input = user_input.lower().split()
         return all(any(keyword in word for word in normalized_input) for keyword in keywords)
@@ -429,7 +582,8 @@ class ChatBot:
         if "laptop" in user_input.lower():
             return "bilgisayar"
         return None
-
+   
+    
     def get_products_by_features(self,user_input):
         features = [part.strip() for part in user_input.split(";")]
         results = []
@@ -487,6 +641,60 @@ class ChatBot:
         else:
             return [{"message": "Hiçbir kritere uygun ürün bulunamadı."}]
 
+    
+    
+    def find_the_most(self, user_input):
+        user_input = self.preprocess_user_input(user_input)
+        subcategory = self.match_product_types(user_input)
+        feature = self.match_featureName_from_input(user_input)
+    
+        if not re.search(r"\b(en iyi|en güzel|en yüksek|en uzun|en büyük|en fazla)\b", user_input, re.IGNORECASE):
+           return None
+        if not subcategory or not feature:
+           return None
+
+        query = """
+        SELECT TOP 1 
+            p.productID AS productID,
+            p.prName AS prName, 
+            p.prPrice AS prPrice,
+            p.prColor AS prColor,
+            sc.subcatName AS subcatName,
+            (SELECT TOP 1 picUrl 
+            FROM Pictures 
+            WHERE Pictures.productID = p.productID 
+            ORDER BY picUrl) AS picUrl,
+            f.fullFeature AS full_feature, 
+            f.featureValue AS value, 
+            f.featureName AS featureName
+        FROM Products p
+        LEFT JOIN Subcategories sc ON p.subcategoryID = sc.subcategoryID
+        LEFT JOIN ProductFeatures f ON p.productID = f.productID
+        WHERE LOWER(sc.subcatName) = ? 
+           AND LOWER(f.featureName) = ?
+        ORDER BY f.featureValue DESC;
+        """
+
+        try:
+            params = (subcategory,feature)
+            products = self.db.execute(query, params).fetchall()
+            if products:
+                return [{
+                    "productID": row[0],
+                    "name": row[1] if row[1] else "Ürün adı yok",
+                    "price": row[2] if row[2] else "0.00",
+                    "color": row[3] if row[3] else "Ürün rengi bilinmiyor",
+                    "subcategory": row[4] if row[4] else "Ürün alt kategorisi bilinmiyor",
+                    "picUrl": row[5] if row[5] else "Ürün fotoğrafı yok",
+                } for row in products]
+            else:
+                return [{"message": "Uygun ürün bulunamadı."}]
+        except Exception as e:
+            print(f"Veritabanı find_the_most sorgusunda hata oluştu: {e}")
+            return [{"message": "Bir hata oluştu."}]
+
+    
+    
     def get_user_query(self, user_input):
         """
         Kullanıcının mesajını analiz eder.
@@ -547,7 +755,8 @@ class ChatBot:
             params.append(f"%{price}%")
         if prName:
             base_query += f" AND LOWER(p.prName) LIKE LOWER(?)"
-            params.append(f"%{prName}%")       
+            params.append(f"%{prName}%") 
+              
         
 
         base_query, params = self.filter_by_price(user_input,base_query, params)
@@ -629,8 +838,8 @@ class ChatBot:
                params.append(f"%{full_feature}%")
 
             if price:
-                base_query += f" AND p.prPrice LIKE ?"
-                params.append(f"%{price}%")
+                base_query += f" AND p.prPrice = ?"
+                params.append(price)
             
             cursor.execute(base_query, params)
             rows = cursor.fetchall()
@@ -644,6 +853,8 @@ class ChatBot:
         except Exception as e:
             print(f"Hata: {str(e)}")
             return []
+  
+  
   
     def process_coma_separated_input(self, user_input):
                
@@ -697,6 +908,8 @@ class ChatBot:
         except Exception as e : 
             return [{"message" : f"Hata {str(e)}"}]
 
+
+
     def process_user_input(self, user_input):
         
         feedback_response = self.check_feedback(user_input)
@@ -710,6 +923,35 @@ class ChatBot:
         small_talk_response = self.check_small_talk(user_input)
         if small_talk_response:
             return[{"message": small_talk_response}]
+
+        appreciation_response = self.check_appreciation(user_input)
+        if appreciation_response:
+            return[{"message": appreciation_response}]
+
+        goodbye_response = self.check_goodbye(user_input)
+        if goodbye_response:
+            return[{"message": goodbye_response}]
+
+        if any (keyword in user_input.lower() for keyword in ["en ucuz","en pahalı"]):
+            if "en ucuz" in user_input.lower():
+                price_condition = "en ucuz"
+            elif "en pahalı" in user_input.lower():
+                price_condition = "en pahalı"
+            subcatName = self.match_product_types(user_input)
+            extreme_products = self.get_extreme_price_products(price_condition, subcatName)
+
+            if extreme_products:
+                # Sonuçları JSON formatında döndür
+                 return [{
+                    "productID": row[0],
+                    "name": row[1] if row[1] else "Ürün adı yok",
+                    "price": row[2] if row[2] else "0.00",
+                    "color": row[3] if row[3] else "renk bulunamadı",
+                    "subcategory": row[4] if row[4] else "Alt kategori bilinmiyor",
+                    "picUrl": row[5] if len(row) >5 else None 
+                } for row in extreme_products]
+            else:
+                return [{"message": f"Hiç {price_condition} ürün bulunamadı."}]
 
         if self.contains_kwords(user_input, ["kargo", "takip"]):  
             help_message = """
@@ -730,7 +972,7 @@ class ChatBot:
             </ul>
             """           
             return [{"message" : help_message}]
-
+ 
         if "en iyi telefonlar" in user_input.lower():
             top_phones = self.get_top_phones()  # En iyi telefonları getir
             if top_phones:
@@ -740,7 +982,7 @@ class ChatBot:
                     "price": row[2] if row[2] else "0.00", 
                     "color": row[3] if row[3] else "Ürün rengi bilinmiyor",
                     "subcategory": row[4] if row[4] else "Ürün subcategory'si bilinmiyor",
-                    "picUrl": row[5] if len(row) > 5 else None,
+                    "picUrl": row[5] if row[5] else "Picture yok",
                 } for row in top_phones]
             else:
                 return [{"message": "Şu anda en iyi telefonlar listesi boş."}]
@@ -760,6 +1002,21 @@ class ChatBot:
                         } for row in top_compts]
             else:
                 return [{"message" : "Şu anda en iyi bilgisayarlar getirilemiyor."}]
+               
+        if any (keyword in user_input.lower() for keyword in ["en iyi","en güzel","en yüksek","en fazla","en uzun","en büyük"]):
+           results = self.find_the_most(user_input)
+           if results:
+              return results
+           else:
+              return [{"message": "Kriterlere uygun ürün bulunamadı."}]
+
+        higher_pattern = r"ten daha iyi|den daha iyi|daha güzel|daha yüksek|daha fazla|daha büyük"
+        if re.search(higher_pattern, user_input, re.IGNORECASE):
+            results = self.find_higher_features(user_input)
+            if results:
+                return results
+            else:
+                return None
 
         if ";" in user_input:
             return self.get_products_by_features(user_input)
@@ -769,8 +1026,11 @@ class ChatBot:
         
         color, product_type, full_feature, price, prName= self.get_user_query(user_input)
         print(f"Color: {color}, Product Type: {product_type}, Feature: {full_feature}, Price:{price}, Product Name:{prName}")  # Debug çıktısı
-        products = self.fetch_products(color, product_type, full_feature, price, prName, user_input)
         
+        base_q ="SELECT p.productID, p.prName, p.prPrice, p.prColor, sc.subcatName, p.prImageUrl FROM Products p JOIN Subcategories sc ON p.subcategoryID = sc.subcategoryID WHERE 1=1"
+        paramsq = []
+        base_q, paramsq = self.filter_by_price(user_input,base_q,paramsq)      
+        products = self.fetch_products(color, product_type, full_feature, price, prName, user_input)
         if products:
             # Ürünleri JSON formatında döndür
             return [{
